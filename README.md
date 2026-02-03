@@ -1,6 +1,6 @@
 # 🎒 KPC Solver: Knapsack Problem with Conflicts
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.14%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![OR-Tools](https://img.shields.io/badge/Library-Google%20OR--Tools-4285F4?logo=google&logoColor=white)](https://developers.google.com/optimization)
 ![MIP](https://img.shields.io/badge/Exact_Solver-MIP-FF6F00)
 ![CP-SAT](https://img.shields.io/badge/Exact_Solver-CP--SAT-FF6F00)
@@ -89,5 +89,6 @@ Questo progetto è rilasciato sotto licenza MIT.
 
 Realizzato da Cristian Piero Alioto\
 Data: 03/02/2026
+
 
 
