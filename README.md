@@ -10,8 +10,9 @@
 ![Course](https://img.shields.io/badge/Course-Algoritmi_di_Ottimizzazione-009E73)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-> **Progetto per il corso di Algoritmi di Ottimizzazione** > **Anno Accademico:** 2025/2026  
-> **Autore:** Cristian Piero Alioto  
+> **Progetto per il corso di Algoritmi di Ottimizzazione** <br>
+> **Anno Accademico:** 2025/2026 <br>
+> **Autore:** Cristian Piero Alioto <br>
 > **Università:** Università degli Studi di Modena e Reggio Emilia (FIM)
 
 -----
@@ -88,4 +89,5 @@ Questo progetto è rilasciato sotto licenza MIT.
 
 Realizzato da Cristian Piero Alioto\
 Data: 03/02/2026
+
 
