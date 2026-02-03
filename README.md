@@ -71,4 +71,10 @@ python main.py
 ```
 
 ## Licenza
+
 Questo progetto è rilasciato sotto licenza MIT.
+
+-----
+
+Realizzato da Cristian Piero Alioto\
+Data: 03/02/2026
