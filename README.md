@@ -14,10 +14,14 @@
 > **Autore:** Cristian Piero Alioto  
 > **Università:** Università degli Studi di Modena e Reggio Emilia (FIM)
 
+-----
+
 ## Descrizione
 Questo progetto affronta il **Knapsack Problem with Conflicts (KPC)**, una variante NP-Hard del classico problema dello zaino in cui esistono vincoli di incompatibilità tra coppie di oggetti, rappresentati da un grafo G=(V,E).
 
 L'obiettivo è analizzare e confrontare le performance di **solutori esatti** e **metaeuristiche**, valutando l'efficacia di strategie ibride come il **Warm Start** su un ampio benchmark di **4.320 istanze**.
+
+-----
 
 ## Metodologie Implementate
 Il software integra tre approcci risolutivi principali e una tecnica di ibridazione:
@@ -36,6 +40,8 @@ Tecnica per accelerare i solutori esatti iniettando informazioni ottenute da GRA
 * **Lower Bound Cut:** Impone al solver di cercare solo soluzioni migliori di quella euristica.
 * **Solution Hinting:** Fornisce la soluzione generata da GRASP come punto di partenza per guidare il branching iniziale.
 
+-----
+
 ## Struttura del Repository
 ```text
 KPC-Solver/
@@ -47,6 +53,8 @@ KPC-Solver/
 ├── main.py             # Main
 └── requirements.txt    # Dipendenze
 ```
+
+-----
 
 ## Installazione e Utilizzo
 1. **Clona il repository**
@@ -70,6 +78,8 @@ L'architettura usa il multiprocessing per parallelizzare l'esecuzione sui core d
 python main.py
 ```
 
+-----
+
 ## Licenza
 
 Questo progetto è rilasciato sotto licenza MIT.
@@ -78,3 +88,4 @@ Questo progetto è rilasciato sotto licenza MIT.
 
 Realizzato da Cristian Piero Alioto\
 Data: 03/02/2026
+
