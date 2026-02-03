@@ -300,27 +300,35 @@ def generate_global_summary_tables():
 
 ###  Genera sommari "singoli" (tempi e ottimi)
 def extract_descriptive_stats(results, dataset_name):
-    """Estrae statistiche descrittive (Tempi e Ottimi)."""
+    """Estrae statistiche descrittive (Tempi, Ottimi e GAP GRASP)."""
+    # Inizializzazione dizionari
     stats_type = defaultdict(
-        lambda: {'mip_time': [], 'cp_time': [], 'grasp_time': [], 'mip_opt': 0, 'cp_opt': 0, 'grasp_opt': 0,
-                 'count': 0})
+        lambda: {'mip_time': [], 'cp_time': [], 'grasp_time': [], 'grasp_gap': [],
+                 'mip_opt': 0, 'cp_opt': 0, 'grasp_opt': 0, 'count': 0})
+
     stats_density = defaultdict(
-        lambda: {'mip_time': [], 'cp_time': [], 'grasp_time': [], 'mip_opt': 0, 'cp_opt': 0, 'grasp_opt': 0,
-                 'count': 0})
+        lambda: {'mip_time': [], 'cp_time': [], 'grasp_time': [], 'grasp_gap': [],
+                 'mip_opt': 0, 'cp_opt': 0, 'grasp_opt': 0, 'count': 0})
 
     for res in results:
         if 'type_id' not in res or 'density' not in res: continue
+
         m_time = res['mip'].get('time', 0)
         c_time = res['cp'].get('time', 0)
         g_time = res['grasp'].get('time', 0)
+        gap_val = res.get('gap', 0.0)  # Estrazione GAP
+
         m_opt = 1 if res['mip'].get('status') == 'OPTIMAL' else 0
         c_opt = 1 if res['cp'].get('status') == 'OPTIMAL' else 0
-        g_opt = 1 if (res.get('gap', 100) < 1e-6) and (c_opt or m_opt) else 0
+        # Consideriamo GRASP ottimo se il gap è quasi zero e abbiamo una conferma da MIP/CP
+        g_opt = 1 if (gap_val < 1e-6) and (c_opt or m_opt) else 0
 
         for key, container in [(res['type_id'], stats_type), (res['density'], stats_density)]:
             container[key]['mip_time'].append(m_time)
             container[key]['cp_time'].append(c_time)
             container[key]['grasp_time'].append(g_time)
+            container[key]['grasp_gap'].append(gap_val)  # Accumulo GAP
+
             container[key]['mip_opt'] += m_opt
             container[key]['cp_opt'] += c_opt
             container[key]['grasp_opt'] += g_opt
@@ -328,16 +336,23 @@ def extract_descriptive_stats(results, dataset_name):
 
     rows_type = []
     rows_density = []
+
     for container, out_list in [(stats_type, rows_type), (stats_density, rows_density)]:
         for key in sorted(container.keys()):
             data = container[key]
             n = data['count']
             if n == 0: continue
             out_list.append({
-                'dataset': dataset_name, 'key': key,
-                'mip_time': sum(data['mip_time']) / n, 'cp_time': sum(data['cp_time']) / n,
+                'dataset': dataset_name,
+                'key': key,
+                'mip_time': sum(data['mip_time']) / n,
+                'cp_time': sum(data['cp_time']) / n,
                 'grasp_time': sum(data['grasp_time']) / n,
-                'mip_opt': data['mip_opt'], 'cp_opt': data['cp_opt'], 'grasp_opt': data['grasp_opt'], 'total_inst': n
+                'grasp_gap': sum(data['grasp_gap']) / n,  # Media GAP locale
+                'mip_opt': data['mip_opt'],
+                'cp_opt': data['cp_opt'],
+                'grasp_opt': data['grasp_opt'],
+                'total_inst': n
             })
     return rows_type, rows_density
 
@@ -346,11 +361,13 @@ def prepare_descriptive_table_data(raw_data):
     if not raw_data: return []
 
     n_rows = len(raw_data)
-    # Media dei tempi, Somma degli ottimali
+
+    # Calcolo Medie Totali
     avg_vals = {
         'mip_time': sum(r['mip_time'] for r in raw_data) / n_rows,
         'cp_time': sum(r['cp_time'] for r in raw_data) / n_rows,
         'grasp_time': sum(r['grasp_time'] for r in raw_data) / n_rows,
+        'grasp_gap': sum(r['grasp_gap'] for r in raw_data) / n_rows,  # Media GAP Totale
         'mip_opt': sum(r['mip_opt'] for r in raw_data),
         'cp_opt': sum(r['cp_opt'] for r in raw_data),
         'grasp_opt': sum(r['grasp_opt'] for r in raw_data),
@@ -359,26 +376,39 @@ def prepare_descriptive_table_data(raw_data):
 
     formatted = []
     last_ds = None
+
+    # Righe dati
     for row in raw_data:
         ds_label = row['dataset'] if row['dataset'] != last_ds else ""
         formatted.append([
-            ds_label, str(row['key']),
-            f"{row['mip_time']:.2f}s", f"{row['cp_time']:.2f}s", f"{row['grasp_time']:.3f}s",
-            f"{row['mip_opt']}/{row['total_inst']}", f"{row['cp_opt']}/{row['total_inst']}",
-            f"{row['grasp_opt']}/{row['total_inst']}"
+            ds_label,
+            str(row['key']),
+            f"{row['mip_time']:.2f}s",
+            f"{row['cp_time']:.2f}s",
+            f"{row['grasp_time']:.3f}s",
+            f"{row['mip_opt']}/{row['total_inst']}",
+            f"{row['cp_opt']}/{row['total_inst']}",
+            f"{row['grasp_opt']}/{row['total_inst']}",
+            f"{row['grasp_gap']:.2f}%"  # Nuova Colonna GAP
         ])
         last_ds = row['dataset']
 
+    # Riga Totale
     formatted.append([
-        "TOTALE", "MEDIA",
-        f"{avg_vals['mip_time']:.2f}s", f"{avg_vals['cp_time']:.2f}s", f"{avg_vals['grasp_time']:.3f}s",
-        f"{avg_vals['mip_opt']}/{avg_vals['total_inst']}", f"{avg_vals['cp_opt']}/{avg_vals['total_inst']}",
-        f"{avg_vals['grasp_opt']}/{avg_vals['total_inst']}"
+        "TOTALE",
+        "MEDIA",
+        f"{avg_vals['mip_time']:.2f}s",
+        f"{avg_vals['cp_time']:.2f}s",
+        f"{avg_vals['grasp_time']:.3f}s",
+        f"{avg_vals['mip_opt']}/{avg_vals['total_inst']}",
+        f"{avg_vals['cp_opt']}/{avg_vals['total_inst']}",
+        f"{avg_vals['grasp_opt']}/{avg_vals['total_inst']}",
+        f"{avg_vals['grasp_gap']:.2f}%"  # Nuova Colonna GAP Totale
     ])
     return formatted
 
 def generate_descriptive_summary_tables():
-    """Genera le tabelle descrittive."""
+    """Genera le tabelle descrittive"""
     base_reports_dir = os.path.join("outputs", "reports")
     if not os.path.exists(base_reports_dir): return
 
@@ -408,7 +438,7 @@ def generate_descriptive_summary_tables():
                 with open(warm_file, 'r') as f:
                     data = json.load(f).get('results', [])
                 rows_t, rows_d = extract_descriptive_stats(data, dataset)
-                warm_type_all.extend(rows_t);
+                warm_type_all.extend(rows_t)
                 warm_dens_all.extend(rows_d)
             except:
                 pass
@@ -421,8 +451,9 @@ def generate_descriptive_summary_tables():
     global_plots_dir = os.path.join("outputs", "plots", "SUMMARY_TABLES")
     os.makedirs(global_plots_dir, exist_ok=True)
 
-    cols_type = ["Dataset", "Type", "MIP T", "CP T", "GRASP T", "MIP Opt", "CP Opt", "GRASP Opt"]
-    cols_dens = ["Dataset", "Density", "MIP T", "CP T", "GRASP T", "MIP Opt", "CP Opt", "GRASP Opt"]
+    # Aggiornamento Header Colonne
+    cols_type = ["Dataset", "Type", "MIP T", "CP T", "GRASP T", "MIP Opt", "CP Opt", "GRASP Opt", "GRASP Gap %"]
+    cols_dens = ["Dataset", "Density", "MIP T", "CP T", "GRASP T", "MIP Opt", "CP Opt", "GRASP Opt", "GRASP Gap %"]
 
     save_table_image_generic(data_cold_type, cols_type, "Statistiche Descrittive COLD START (per Tipo)",
                              "Descriptive_COLD_Type.png", global_plots_dir)
