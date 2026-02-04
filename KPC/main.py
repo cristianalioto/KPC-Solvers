@@ -1,4 +1,6 @@
 import os
+# Impostiamo i thread a 1 per le librerie numeriche per evitare conflitti nel multiprocessing sui file.
+# CP-SAT ignora questo e userà tutti i core disponibili quando lanciato sequenzialmente.
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -6,15 +8,13 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import sys
-sys.path.append(os.getcwd()) # Aggiunge la directory corrente al path
-
+sys.path.append(os.getcwd())
 import time
 import json
 import multiprocessing
-import winsound
 
 from src.utilities.plot import generate_all_plots
-from src.utilities.stats import generate_stats, generate_all_stats
+from src.utilities.stats import generate_all_stats
 from src.utilities.input_loader import parse_file
 from src.solvers.cp_solver import KPC_CPSolver
 from src.solvers.grasp_solver import KPC_GRASPSolver
@@ -22,7 +22,7 @@ from src.solvers.mip_solver import KPC_MIPSolver
 
 
 # ==========================================
-# Utilità
+# Utilità Generali
 # ==========================================
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -38,10 +38,6 @@ def get_dataset_selection():
         key=lambda x: (x[0], int(x[1:])) if len(x) > 1 and x[1:].isdigit() else x
     )
 
-    if not available_datasets:
-        print(f"\n => Errore: Nessuna sottocartella trovata in '{data_dir}'.")
-        sys.exit(1)
-
     print(f"\nDataset disponibili: {', '.join(available_datasets)}")
     while True:
         d = input(f">> Seleziona Dataset: ").strip().upper()
@@ -49,8 +45,23 @@ def get_dataset_selection():
             return d
         print(f"\n => Input non valido.")
 
+def print_table_header(solver_name, suffix=""):
+    full_name = f"{solver_name} {suffix}".strip()
+    header = f"{'PROG':<11} | {'FILE':<40} | {full_name + ' (TIME)':<15} | {full_name + ' (OBJ)':<15}"
+    print("-" * len(header))
+    print(header)
+    print("-" * len(header))
+    return header
+
+def print_table_row(i, total, filename, time_val, obj_val, status=None):
+    obj_str = f"{int(obj_val)}"
+    if status == 'OPTIMAL': obj_str += "*"
+    print(f"{f'({i}/{total})':<11} | {filename:<40} | {time_val:<15.3f} | {obj_str:<15}")
+
+###
+# Utilità per GRASP & Warm Start
+###
 def check_solution_validity(data, selected_items):
-    """Controllo di validità di una soluzione"""
     if not selected_items: return True, "Empty"
     current_weight = sum(data['weights'][i] for i in selected_items)
     if current_weight > data['capacity']: return False, "OverCapacity"
@@ -59,228 +70,257 @@ def check_solution_validity(data, selected_items):
         if u in sel_set and v in sel_set: return False, "Conflict"
     return True, "OK"
 
-# ==========================================
-# Workers
-# ==========================================
+def load_precomputed_grasp(report_dir, dataset):
+    """Carica i risultati GRASP se esistono per usarli come Warm Start"""
+    grasp_file = os.path.join(report_dir, f"{dataset}_GRASP.json")
+    lookup = {}
+    if os.path.exists(grasp_file):
+        try:
+            with open(grasp_file, 'r') as f:
+                data = json.load(f)
+            for item in data.get("results", []):
+                lookup[item['filename']] = item['grasp']
+        except Exception:
+            pass  # Silently fail if file corrupt or empty
+    return lookup
+
+def resolve_grasp_solution(data, filename, precomputed_grasp, ws_mode):
+    """
+    Restituisce la soluzione GRASP:
+    1. Dal dizionario precalcolato se esiste.
+    2. Calcolandola al volo se ws_mode=True ma non esiste il precalcolo.
+    3. None se ws_mode=False.
+    """
+    if not ws_mode:
+        return None, 0
+
+    # Caso 1: C'è il precalcolato
+    if precomputed_grasp and filename in precomputed_grasp:
+        g_res = precomputed_grasp[filename]
+        return g_res.get('selected_items', []), g_res.get('objective', 0)
+
+    # Caso 2: Calcolo al volo (Fallback)
+    solver = KPC_GRASPSolver(data, max_iterations=50)
+    res = solver.solve()
+    return res.get('selected_items', []), res.get('objective', 0)
+
+###
+# Workers (Multiprocessing)
+###
 def run_grasp_worker(args):
     filepath, filename = args
-    try:
-        parts = filename.split('_')
-        type_id = int(parts[1])
-        density = float(parts[-1])
-        data = parse_file(filepath)
-    except:
-        return None
+    data = parse_file(filepath)
     if not data: return None
 
-    # Esegui GRASP
     solver = KPC_GRASPSolver(data, max_iterations=100)
     res = solver.solve()
 
     valid, _ = check_solution_validity(data, res.get('selected_items', []))
     if not valid: res['objective'] = 0
 
-    return {
-        "filename": filename,
-        "n": data['n'],
-        "type_id": type_id,
-        "density": density,
-        "grasp": res
-    }
+    return {"filename": filename, "n": data['n'], "grasp": res}
 
-def run_full_benchmark_worker(args):
-    filepath, filename, ws_mode, instance_class, precomputed_grasp = args
-    try:
-        parts = filename.split('_')
-        type_id = int(parts[1])
-        density = float(parts[-1])
-        data = parse_file(filepath)
-    except:
-        return None
+def run_mip_worker(args):
+    filepath, filename, ws_mode, precomputed_grasp_item = args
+    data = parse_file(filepath)
     if not data: return None
 
-    ### Gestione GRASP: Se precalcolato usalo, altrimenti eseguilo
-    if precomputed_grasp:
-        res_grasp = precomputed_grasp
-    else:
-        solver = KPC_GRASPSolver(data, max_iterations=100)
-        res_grasp = solver.solve()
-        valid, _ = check_solution_validity(data, res_grasp.get('selected_items', []))
-        if not valid: res_grasp['objective'] = 0
+    sol_list, sol_val = None, None
+    if ws_mode:
+        if precomputed_grasp_item:
+            sol_list = precomputed_grasp_item.get('selected_items')
+            sol_val = precomputed_grasp_item.get('objective')
+        else:
+            g_solver = KPC_GRASPSolver(data, max_iterations=50)
+            g_res = g_solver.solve()
+            sol_list = g_res.get('selected_items')
+            sol_val = g_res.get('objective')
 
-    ### Warm Start
-    sol_list = res_grasp.get('selected_items', []) if ws_mode else None
-    sol_val = res_grasp.get('objective', 0) if ws_mode else None
+    solver = KPC_MIPSolver(data, time_limit_seconds=60)
+    res = solver.solve(sol_list, sol_val)
 
-    ### Esecuzione
-    TIME_LIMIT = 60
-    res_mip = KPC_MIPSolver(data, time_limit_seconds=TIME_LIMIT).solve(sol_list, sol_val)
-    res_cp = KPC_CPSolver(data, time_limit_seconds=TIME_LIMIT).solve(sol_list, sol_val)
+    return {"filename": filename, "n": data['n'], "mip": res, "ws_used": ws_mode}
 
-    ### Risultati
-    best_exact = max(res_cp.get('objective', 0), res_mip.get('objective', 0))
-    gap = 100 * (best_exact - res_grasp['objective']) / best_exact if best_exact > 0 else 0
-    return {
-        "filename": filename, "n": data['n'], "type_id": type_id, "density": density,
-        "ws_used": ws_mode, "gap": gap,
-        "mip": res_mip, "cp": res_cp, "grasp": res_grasp
-    }
-
-# ==========================================
+###
 # Managers
-# ==========================================
+###
+
 def run_grasp_manager(dataset, data_path, files, max_workers, report_dir):
-    ### Configurazione
     out_file = os.path.join(report_dir, f"{dataset}_GRASP.json")
-    print(f"\n--> AVVIO GRASP su {dataset}...")
-    print(f" - Output: {out_file}")
-    print(f" - Workers: {max_workers}")
+    print(f"\n--> AVVIO GRASP su {dataset} (Parallel: {max_workers} workers)...")
+    print_table_header("GRASP")
 
-    ### Header
-    header = f"{'PROG':<11} | {'FILE':<45} | {'OBJ':<10} | {'TIME (s)':<8}"
-    print("-" * len(header))
-    print(header)
-    print("-" * len(header))
-
-    ### Multiprocessing
     tasks = [(os.path.join(data_path, f), f) for f in files]
     results = []
+
     start_t = time.time()
     with multiprocessing.Pool(processes=max_workers) as pool:
         for i, res in enumerate(pool.imap_unordered(run_grasp_worker, tasks), 1):
             if res:
                 results.append(res)
-                filename = res['filename']
-                obj_val = int(res['grasp']['objective'])
-                time_val = res['grasp']['time']
-                print(f"({i}/{len(files)})".ljust(11) +
-                      f" | {filename:<45} | {obj_val:<10} | {time_val:<7.3f}")
-
-    ### Termine esecuzione => Salvataggio
+                print_table_row(i, len(files), res['filename'], res['grasp']['time'], res['grasp']['objective'])
     total_time = time.time() - start_t
+
     with open(out_file, "w") as f:
-        json.dump({
-            "config": {"dataset": dataset, "mode": "GRASP", "total_time": total_time},
-            "results": results
-        }, f, indent=4)
+        json.dump({"config": {"dataset": dataset, "mode": "GRASP", "total_time": total_time}, "results": results}, f,
+                  indent=4)
+    print(f" => Salvato: {out_file}")
 
-    print("-" * len(header))
-    print(f"\n => GRASP completato. File salvato in: {out_file}")
+def run_cp_manager(dataset, data_path, files, report_dir, ws_mode):
+    mode_suffix = "WARM" if ws_mode else "COLD"
+    out_file = os.path.join(report_dir, f"{dataset}_CP_{mode_suffix}.json")
 
-def run_full_benchmark_manager(dataset, data_path, files, max_workers, report_dir):
-    instance_class = dataset[0]
-
-    ### Check esistenza file GRASP precalcolato
-    grasp_file_path = os.path.join(report_dir, f"{dataset}_GRASP.json")
     grasp_lookup = {}
-    if os.path.exists(grasp_file_path):
-        print(f"\n => Trovato file GRASP preesistente: {grasp_file_path}")
-        print("    I risultati verranno riutilizzati per il calcolo del GAP e il Warm Start.")
-        try:
-            with open(grasp_file_path, 'r') as f:
-                gdata = json.load(f)
-            for item in gdata.get("results", []):
-                grasp_lookup[item['filename']] = item['grasp']
-        except Exception as e:
-            print(f"\n => Errore lettura file GRASP: {e}. Verrà ricalcolato.")
-            grasp_lookup = {}
-    else:
-        print("\n => Nessun file GRASP trovato. Verrà calcolato al volo per ogni istanza.")
+    if ws_mode:
+        grasp_lookup = load_precomputed_grasp(report_dir, dataset)
+        if not grasp_lookup:
+            print("   [!] Warning: File GRASP non trovato. Calcolo GRASP al volo attivo.")
 
-    ### Warm Start?
-    while True:
-        ws_str = input("\n>> Warm Start? (y = SI / n = NO): ").strip().lower()
-        if ws_str in ['y', 'n']: break
-    ws_mode = (ws_str == 'y')
+    print(f"\n--> AVVIO CP [{mode_suffix}] su {dataset} (Sequenziale)...")
+    print_table_header("CP", mode_suffix)
 
-    ### Configurazioni
-    file_suffix = "WARM" if ws_mode else "COLD"
-    out_file = os.path.join(report_dir, f"{dataset}_{file_suffix}.json")
-
-    ### Header
-    print(f"\n--> AVVIO FULL BENCHMARK [{file_suffix}] su {dataset}...")
-    print(f" - Output: {out_file}")
-    print(f" - Workers: {max_workers}")
-    header = (f"{'PROG':<11} | {'FILE':<40} | {'WS':<3} | "
-              f"{'MIP':<9} | {'T(MIP)':<7} | {'CP':<9} | {'T(CP)':<7} | {'GRASP':<9} | {'GAP%':<6}")
-
-    print("-" * len(header))
-    print(header)
-    print("-" * len(header))
-
-    ### Multiprocessing
-    tasks = []
-    for f in files:
-        pre_g = grasp_lookup.get(f)
-        tasks.append((os.path.join(data_path, f), f, ws_mode, instance_class, pre_g))
     results = []
     start_t = time.time()
-    with multiprocessing.Pool(processes=max_workers) as pool:
-        for i, res in enumerate(pool.imap_unordered(run_full_benchmark_worker, tasks), 1):
-            if res:
-                results.append(res)
-                rm, rc, rg = res['mip'], res['cp'], res['grasp']
-                mip_s = f"{int(rm['objective'])}*" if rm.get('status') == 'OPTIMAL' else f"{int(rm['objective'])}"
-                cp_s = f"{int(rc['objective'])}*" if rc.get('status') == 'OPTIMAL' else f"{int(rc['objective'])}"
-                ws_str = "SI" if res['ws_used'] else "NO"
-                prog_str = f"({i}/{len(files)})"
-                print(f"{prog_str:<11} | {res['filename']:<40} | {ws_str:<3} | "
-                      f"{mip_s:<9} | {rm['time']:<7.3f} | {cp_s:<9} | {rc['time']:<7.3f} | "
-                      f"{int(rg['objective']):<9} | {res['gap']:<6.2f}")
 
-    ### Termine Esecuzione => Salvataggio
+    for i, filename in enumerate(files, 1):
+        filepath = os.path.join(data_path, filename)
+        data = parse_file(filepath)
+        if not data: continue
+
+        sol_list, sol_val = resolve_grasp_solution(data, filename, grasp_lookup, ws_mode)
+
+        # CP Solver (Usa tutti i thread internamente)
+        solver = KPC_CPSolver(data, time_limit_seconds=60)
+        res = solver.solve(sol_list, sol_val)
+
+        results.append({"filename": filename, "n": data['n'], "cp": res, "ws_used": ws_mode})
+        print_table_row(i, len(files), filename, res['time'], res['objective'], res.get('status'))
+
     total_time = time.time() - start_t
     with open(out_file, "w") as f:
-        json.dump({
-            "config": {"dataset": dataset, "mode": file_suffix, "total_time": total_time},
-            "results": results
-        }, f, indent=4)
+        json.dump({"config": {"dataset": dataset, "mode": f"CP_{mode_suffix}", "ws": ws_mode, "total_time": total_time},
+                   "results": results}, f, indent=4)
+    print(f" => Salvato: {out_file}")
 
-    print("-" * len(header))
-    print(f"\n => Benchmark completato. File: {out_file}")
-    generate_stats(dataset, file_suffix, results, total_time)  # Generazione automatica statistiche
+def run_mip_manager(dataset, data_path, files, max_workers, report_dir, ws_mode):
+    mode_suffix = "WARM" if ws_mode else "COLD"
+    out_file = os.path.join(report_dir, f"{dataset}_MIP_{mode_suffix}.json")
 
-# ==========================================
+    grasp_lookup = {}
+    if ws_mode:
+        grasp_lookup = load_precomputed_grasp(report_dir, dataset)
+
+    print(f"\n--> AVVIO MIP [{mode_suffix}] su {dataset} (Parallel: {max_workers} workers)...")
+    print_table_header("MIP", mode_suffix)
+
+    tasks = []
+    for f in files:
+        g_item = grasp_lookup.get(f) if ws_mode else None
+        tasks.append((os.path.join(data_path, f), f, ws_mode, g_item))
+
+    results = []
+    start_t = time.time()
+
+    with multiprocessing.Pool(processes=max_workers) as pool:
+        for i, res in enumerate(pool.imap_unordered(run_mip_worker, tasks), 1):
+            if res:
+                results.append(res)
+                print_table_row(i, len(files), res['filename'], res['mip']['time'], res['mip']['objective'],
+                                res['mip'].get('status'))
+
+    total_time = time.time() - start_t
+    with open(out_file, "w") as f:
+        json.dump(
+            {"config": {"dataset": dataset, "mode": f"MIP_{mode_suffix}", "ws": ws_mode, "total_time": total_time},
+             "results": results}, f, indent=4)
+    print(f" => Salvato: {out_file}")
+
+def run_complete_benchmark(max_workers):
+    target_datasets = ["C1", "C3", "C10", "R1", "R3", "R10"]
+    print("\n=======================================================")
+    print("      AVVIO AUTOMATICO COMPLETO (ALL DATASETS)       ")
+    print("=======================================================")
+    print(f"Datasets: {', '.join(target_datasets)}")
+    print(f"Workers MIP/GRASP: {max_workers}")
+    print(f"CP Sequenziale: Full workers per solver")
+    print("-------------------------------------------------------")
+    print("ATTENZIONE: Questa operazione richiederà molto tempo.")
+    input("Premi INVIO per iniziare...")
+
+    for dataset in target_datasets:
+        data_path = os.path.join("data", dataset)
+        if not os.path.exists(data_path):
+            print(f"\n[SKIP] Dataset {dataset} non trovato in 'data/'.")
+            continue
+
+        files = sorted([f for f in os.listdir(data_path) if f.startswith("BPPC")])
+        report_dir = os.path.join("outputs", "reports", dataset)
+        os.makedirs(report_dir, exist_ok=True)
+
+        print(f"\n\n#######################################################")
+        print(f"             ELABORAZIONE DATASET: {dataset}")
+        print(f"#######################################################")
+
+        # 1. Esegui GRASP
+        run_grasp_manager(dataset, data_path, files, max_workers, report_dir)
+
+        # 2. Esegui CP (COLD & WARM)
+        run_cp_manager(dataset, data_path, files, report_dir, ws_mode=False)  # Cold
+        run_cp_manager(dataset, data_path, files, report_dir, ws_mode=True)  # Warm
+
+        # 3. Esegui MIP (COLD & WARM)
+        run_mip_manager(dataset, data_path, files, max_workers, report_dir, ws_mode=False)  # Cold
+        run_mip_manager(dataset, data_path, files, max_workers, report_dir, ws_mode=True)  # Warm
+
+    print("\n\n=======================================================")
+    print("           TUTTE LE OPERAZIONI COMPLETATE.             ")
+    print("=======================================================")
+
+###
 # Main
-# ==========================================
+###
 def main():
     clear_screen()
     print("==========================================")
     print("            KPC BENCHMARK TOOL            ")
     print("==========================================")
-    print("  1. Esegui GRASP")
-    print("  2. Esegui FULL BENCHMARK (CP vs MIP vs GRASP)")
-    print("  3. Genera Statistiche")
-    print("  4. Genera Grafici")
+    print("  1. Esegui GRASP (Parallel)")
+    print("  2. Esegui CP    (Sequential)")
+    print("  3. Esegui MIP   (Parallel)")
+    print("  4. ESEGUI TUTTO (C1, C3, C10, R1... - COLD & WARM)")
+    print("  ----------------------------------------")
+    print("  5. Genera Statistiche")
+    print("  6. Genera Grafici")
     print("  0. Esci")
     print("==========================================")
 
-    try:    choice = int(input(">> Scelta: "))
+    # Configurazione Workers
+    max_workers = multiprocessing.cpu_count()
+
+    try: choice = int(input(">> Scelta: "))
     except: choice = -1
 
     match choice:
         case 0: print("Uscita."); return
-        case 3: generate_all_stats(); return
-        case 4: generate_all_plots(); return
+        case 4: run_complete_benchmark(max_workers); return
+        case 5: generate_all_stats(); return
+        case 6: generate_all_plots(); return
 
-    # Selezione Dataset comune per opzione 1 e 2
+    # Opzioni Singole (1, 2, 3)
     dataset = get_dataset_selection()
     data_path = os.path.join("data", dataset)
     files = sorted([f for f in os.listdir(data_path) if f.startswith("BPPC")])
-    max_workers = int(multiprocessing.cpu_count() / 2 - 1)
-
-    # Cartella output
     report_dir = os.path.join("outputs", "reports", dataset)
     os.makedirs(report_dir, exist_ok=True)
 
     match choice:
         case 1: run_grasp_manager(dataset, data_path, files, max_workers, report_dir)
-        case 2: run_full_benchmark_manager(dataset, data_path, files, max_workers, report_dir)
-
-    try:
-        winsound.Beep(1000, 1000)
-    except:
-        pass
+        case 2:
+            ws = input(">> Warm Start con GRASP? (y/n): ").strip().lower() == 'y'
+            run_cp_manager(dataset, data_path, files, report_dir, ws_mode=ws)
+        case 3:
+            ws = input(">> Warm Start con GRASP? (y/n): ").strip().lower() == 'y'
+            run_mip_manager(dataset, data_path, files, max_workers, report_dir, ws_mode=ws)
 
 if __name__ == "__main__":
     main()

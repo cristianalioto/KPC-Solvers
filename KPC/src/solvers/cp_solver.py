@@ -30,8 +30,8 @@ class KPC_CPSolver:
 
         ### Configurazione Solver
         solver = cp_model.CpSolver()
-        solver.parameters.num_search_workers = 1
         solver.parameters.max_time_in_seconds = self.time_limit
+        # solver.parameters.num_search_workers = 8 # Di default li usa tutti
         #solver.parameters.log_search_progress = True
 
         ### Risoluzione

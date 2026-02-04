@@ -96,67 +96,78 @@ class KPC_GRASPSolver:
 
     def _local_search(self, solution_list, current_weight):
         """
-        Cerca di migliorare la soluzione facendo scambi (Swap) o aggiunte (Add).
+        Prova a migliorare la soluzione cercando ottimi locali tramite due possibli mosse:
+            1. ADD: Cerca di inserire oggetti se c'è spazio e nessun conflitto.
+            2. SWAP: Prova a inserire un oggetto esterno rimuovendo TUTTI
+               quelli interni che creano conflitto, purché il profitto migliori.
         """
         solution = set(solution_list)
         current_profit = sum(self.profits[i] for i in solution)
 
-        # Lista di oggetti fuori dalla soluzione (potenziali candidati)
+        # Set di tutti gli indici per calcolo veloce dei complementari
         all_nodes = set(range(self.n))
-        non_selected = list(all_nodes - solution)
 
-        ### Itera fino a che non trova più soluzioni migliori
         improved = True
         while improved:
             improved = False
-            random.shuffle(non_selected)  # Mischia per variare la ricerca
 
-            ## 1. ADD (prova ad aggiungere)
-            # Cerca oggetti che entrano "gratis" (senza togliere nulla)
-            to_remove = []
-            for j in non_selected:
+            # Identifichiamo i candidati (oggetti fuori dallo zaino)
+            candidates = list(all_nodes - solution)
+            random.shuffle(candidates)  # Mischia per variare l'esplorazione (tipico GRASP)
+
+            ### FASE 1: ADD (Riempimento Greedy)
+            # Proviamo prima ad aggiungere oggetti che non richiedono rimozioni
+            items_added = False
+            for j in candidates:
+                # Controllo capacità
                 if current_weight + self.weights[j] <= self.capacity:
-                    if self.adj[j].isdisjoint(solution): # Veloce nel controllare conflitti tra set
+                    # Controllo conflitti: disjoint = intersezione vuota con la soluzione
+                    if self.adj[j].isdisjoint(solution):
                         solution.add(j)
                         current_weight += self.weights[j]
                         current_profit += self.profits[j]
-                        to_remove.append(j)
                         improved = True
-                        # Continua a cercare altre aggiunte nello stesso ciclo (Greedy Packing)
+                        items_added = True
+                        # Nota: non facciamo break qui, proviamo ad aggiungerne altri 'gratis'
+                        # nello stesso passaggio per saturare lo zaino velocemente.
 
-            # Pulizia lista candidati
-            for item in to_remove:
-                non_selected.remove(item)
+            if items_added:
+                continue  # Se abbiamo aggiunto qualcosa, ricominciamo il ciclo principale
 
-            if improved: continue  # Se ha aggiunto, ricomincia il ciclo
+            ### FASE 2: SWAP (Logica "1-in, K-out")
+            # Se siamo qui, non possiamo aggiungere nulla "gratis". Proviamo a forzare scambi.
+            # Ricalcoliamo i candidati (quelli rimasti fuori dopo la fase ADD)
+            candidates = list(all_nodes - solution)
+            random.shuffle(candidates)
 
-            ## 2. SWAP (prova a scambiare)
-            # Proviamo a inserire 'j' (fuori) togliendo un 'i' (dentro) che lo blocca
-            for j in non_selected:
-                conflicts_in_sol = solution.intersection(self.adj[j]) # Trova chi blocca j dentro la soluzione
+            for j in candidates:
+                w_j = self.weights[j]
+                p_j = self.profits[j]
 
-                # Se j è bloccato da ESATTAMENTE UN elemento 'i'
-                if len(conflicts_in_sol) == 1:
-                    i = list(conflicts_in_sol)[0]
+                # Identifica TUTTI i conflitti che 'j' ha con gli oggetti nello zaino
+                # self.adj[j] sono i vicini di j. L'intersezione ci dà chi dobbiamo buttare fuori.
+                conflicts_in_bag = solution.intersection(self.adj[j])
 
-                    # Controlla se lo scambio conviene => se il profitto aumenta
-                    diff_profit = self.profits[j] - self.profits[i]
-                    if diff_profit > 0:
-                        diff_weight = self.weights[j] - self.weights[i]
+                # Se non ci sono conflitti ma non siamo entrati nella fase ADD,
+                # significa che non ci stava per peso. Non possiamo fare swap senza conflitti.
+                if not conflicts_in_bag:
+                    continue
 
-                        # Controlla se lo scambio non viola i vincoli di capacità
-                        if current_weight + diff_weight <= self.capacity:
-                            # Eseguiamo lo scambio
-                            solution.remove(i)
-                            solution.add(j)
-                            current_weight += diff_weight
-                            current_profit += diff_profit
-                            non_selected.remove(j)
-                            non_selected.append(i)
-                            improved = True
-                            break  # Riparte dal ciclo principale
+                # Calcoliamo peso e profitto totale degli oggetti da rimuovere
+                w_out = sum(self.weights[k] for k in conflicts_in_bag)
+                p_out = sum(self.profits[k] for k in conflicts_in_bag)
+                profit_gain = p_j - p_out # Guadagno netto di profitto?
+                if profit_gain > 0:
+                    new_weight = current_weight - w_out + w_j # Rispetto della capacità dopo lo scambio?
+                    if new_weight <= self.capacity:
+                        # APPLICA LA SWAP
+                        solution.add(j)
+                        solution -= conflicts_in_bag  # Rimuove tutti i conflittuali in un colpo solo
+                        current_weight = new_weight
+                        current_profit += profit_gain
+                        improved = True
+                        break  # First Improvement: appena troviamo uno scambio buono, riavviamo il ciclo
 
-        ### Termine -> quando smette di migliorare
         return list(solution), current_profit
 
     def solve(self):
