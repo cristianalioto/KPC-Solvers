@@ -218,7 +218,10 @@ def generate_global_summary_tables():
     base_stats_dir = os.path.join("outputs", "stats")
     if not os.path.exists(base_stats_dir): return
 
-    datasets = sorted([d for d in os.listdir(base_stats_dir) if os.path.isdir(os.path.join(base_stats_dir, d))])
+    datasets = sorted(
+        [d for d in os.listdir(base_stats_dir) if os.path.isdir(os.path.join(base_stats_dir, d))],
+        key=lambda x: (x[0], int(x[1:])) if len(x) > 1 and x[1:].isdigit() else x
+    )
 
     raw_type_data_ds = []
     raw_density_data_ds = []
@@ -277,7 +280,6 @@ def generate_global_summary_tables():
             })
         return processed
 
-    # Uso forced_avg=None, così ricalcolano la media sui dati che gli passiamo
     final_type_ds = prepare_data_with_average(raw_type_data_ds, include_dataset_col=True)
     final_density_ds = prepare_data_with_average(raw_density_data_ds, include_dataset_col=True)
     final_type_global = prepare_data_with_average(process_global_acc(global_type_acc), include_dataset_col=False)
@@ -412,7 +414,10 @@ def generate_descriptive_summary_tables():
     base_reports_dir = os.path.join("outputs", "reports")
     if not os.path.exists(base_reports_dir): return
 
-    datasets = sorted([d for d in os.listdir(base_reports_dir) if os.path.isdir(os.path.join(base_reports_dir, d))])
+    datasets = sorted(
+        [d for d in os.listdir(base_reports_dir) if os.path.isdir(os.path.join(base_reports_dir, d))],
+        key=lambda x: (x[0], int(x[1:])) if len(x) > 1 and x[1:].isdigit() else x
+    )
 
     cold_type_all, cold_dens_all = [], []
     warm_type_all, warm_dens_all = [], []
@@ -472,7 +477,11 @@ def generate_all_plots():
         print("Nessuna cartella report trovata.")
         return
 
-    datasets = sorted([d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))])
+    datasets = sorted(
+        [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))],
+        key=lambda x: (x[0], int(x[1:])) if len(x) > 1 and x[1:].isdigit() else x
+    )
+
     if not datasets:
         print("Nessun dataset trovato.")
         return
