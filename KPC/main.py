@@ -33,10 +33,10 @@ def get_dataset_selection():
         print(f"\n => Errore CRITICO: La cartella '{data_dir}' non esiste.")
         sys.exit(1)
 
-    available_datasets = sorted([
-        d for d in os.listdir(data_dir)
-        if os.path.isdir(os.path.join(data_dir, d)) and not d.startswith('.')
-    ])
+    available_datasets = sorted(
+        [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d)) and not d.startswith('.')],
+        key=lambda x: (x[0], int(x[1:])) if len(x) > 1 and x[1:].isdigit() else x
+    )
 
     if not available_datasets:
         print(f"\n => Errore: Nessuna sottocartella trovata in '{data_dir}'.")
